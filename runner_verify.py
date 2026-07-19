@@ -67,11 +67,15 @@ def judge(d, country, body):
     brand = (str(prods[0].get("vendor") or d))[:60].replace("\t", " ").replace("\n", " ")
     return f"{d}\t{country or '?'}\t{n}\t{score}\t{phys_frac}\t{brand}"
 
-def load_rows():
-    import argparse
+import argparse
+def get_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--infile"); ap.add_argument("--shard", type=int); ap.add_argument("--of", type=int)
+    ap.add_argument("--resolved-out")   # write every domain that got a definitive outcome (for retry-waves)
     a, _ = ap.parse_known_args()
+    return a
+
+def load_rows(a):
     if a.infile and a.shard is not None and a.of:
         lines = [l.strip() for l in open(a.infile) if l.strip()]
         lines = lines[a.shard::a.of]          # stride split: shard i handles every Nth domain
@@ -84,7 +88,9 @@ def load_rows():
     return rows
 
 def main():
-    rows = load_rows()
+    args = get_args()
+    rows = load_rows(args)
+    resolved = []   # domains with a definitive ok/dead outcome (NOT throttled) — retry-set = input - resolved
     hist = {"keeper": 0, "not_store": 0, "dead": 0, "rate_final": 0}
     t0 = time.time()
 
@@ -97,16 +103,16 @@ def main():
         return (st, d, c, None)
 
     pending = rows
-    for rnd in range(4):                      # 1 paced pass + up to 3 retries (65s apart for the 60s window)
+    for rnd in range(2):                       # 1 paced pass + 1 retry; real recovery is the retry-WAVE (fresh IPs)
         retry = []
         with cf.ThreadPoolExecutor(max_workers=WORKERS) as ex:
             for kind, d, c, line in ex.map(work, pending):
                 if kind == "keeper":
-                    print(line, flush=True); hist["keeper"] += 1
+                    print(line, flush=True); hist["keeper"] += 1; resolved.append(d)
                 elif kind == "not_store":
-                    hist["not_store"] += 1
+                    hist["not_store"] += 1; resolved.append(d)
                 elif kind == "dead":
-                    hist["dead"] += 1
+                    hist["dead"] += 1; resolved.append(d)
                 else:
                     retry.append((d, c))
         if not retry:
@@ -115,6 +121,9 @@ def main():
         time.sleep(65)
         pending = retry
     hist["rate_final"] = len(pending) if pending else 0
+    if args.resolved_out:
+        with open(args.resolved_out, "w") as f:
+            f.write("\n".join(resolved) + ("\n" if resolved else ""))
     dt = time.time() - t0
     done = hist["keeper"] + hist["not_store"] + hist["dead"]
     sys.stderr.write(f"[DIAG] {len(rows)} in {dt:.0f}s | {hist} | RATE={RATE} | ~{done/dt*60 if dt else 0:.0f}/min done\n")
