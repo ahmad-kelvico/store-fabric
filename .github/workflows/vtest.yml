@@ -1,0 +1,20 @@
+name: vtest
+on:
+  workflow_dispatch:
+jobs:
+  vtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: verify_full on KNOWN-LIVE stores
+        env: { RATE: "200", WORKERS: "12" }
+        run: |
+          echo "IP $(curl -s --max-time 8 https://api.ipify.org)"
+          python3 verify_full.py --resolved-out /tmp/r.txt < endpoint_test_domains.txt > /tmp/k.txt 2>/tmp/d.txt || true
+          echo "=== DIAG ==="; cat /tmp/d.txt
+          echo "=== keepers: $(grep -c $'\t' /tmp/k.txt) ==="; head -5 /tmp/k.txt
+          echo "=== raw curl sanity on first 3 (does homepage 200 via curl?) ==="
+          for d in $(head -3 endpoint_test_domains.txt); do
+            echo "$d homepage=$(curl -s -o /dev/null -w '%{http_code}' -L --max-time 8 https://$d) products=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 https://$d/products.json?limit=1)"
+          done
