@@ -1,0 +1,24 @@
+name: eptest
+on:
+  workflow_dispatch:
+jobs:
+  burst:
+    strategy:
+      fail-fast: false
+      matrix:
+        ep: [pj, hp, sm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: burst one endpoint from a fresh IP
+        run: |
+          echo "runner IP: $(curl -s --max-time 8 https://api.ipify.org)"
+          case "${{ matrix.ep }}" in
+            pj) P="/products.json?limit=1";;
+            hp) P="/";;
+            sm) P="/sitemap.xml";;
+          esac
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36"
+          echo "=== ${{ matrix.ep }} ($P) burst of 300, concurrency 50 ==="
+          cat endpoint_test_domains.txt | xargs -P 50 -I {} curl -s -o /dev/null -w '%{http_code}\n' \
+            --max-time 10 -A "$UA" "https://{}$P" | sort | uniq -c | sort -rn
