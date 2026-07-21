@@ -1,0 +1,26 @@
+name: vdiag
+on:
+  workflow_dispatch:
+jobs:
+  diag:
+    strategy:
+      fail-fast: false
+      matrix:
+        w: ["6", "12", "20"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: verify one shard at WORKERS=${{ matrix.w }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RATE: "200"
+          WORKERS: ${{ matrix.w }}
+        run: |
+          gh release download verify-com --repo "$GITHUB_REPOSITORY" -p "com-000.gz" -D /tmp 2>/dev/null
+          gunzip -c /tmp/com-000.gz | head -2500 > /tmp/shard.txt
+          echo "WORKERS=${{ matrix.w }} on $(wc -l < /tmp/shard.txt) candidates from IP $(curl -s --max-time 8 https://api.ipify.org)"
+          python3 verify_full.py --resolved-out /tmp/r.txt < /tmp/shard.txt > /tmp/k.txt 2>&1
+          tail -1 /tmp/k.txt
+          echo "keepers: $(grep -c $'\t' /tmp/k.txt)"
