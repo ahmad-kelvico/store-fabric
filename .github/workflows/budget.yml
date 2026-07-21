@@ -1,22 +1,24 @@
 name: budget
 on:
   workflow_dispatch:
-    inputs:
-      conc: { default: "40" }
 jobs:
   budget:
+    strategy:
+      fail-fast: false
+      matrix:
+        lim: ["1", "10", "50", "250"]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: single-IP products.json ceiling
+      - name: products.json?limit=${{ matrix.lim }} ceiling from one fresh IP
         run: |
-          echo "runner IP: $(curl -s --max-time 8 https://api.ipify.org)"
+          echo "IP $(curl -s --max-time 8 https://api.ipify.org)"
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36"
           t0=$(date +%s)
-          cat budget_domains.txt | xargs -P ${{ github.event.inputs.conc }} -I {} curl -s -o /dev/null -w '%{http_code}\n' \
-            --max-time 12 -A "$UA" "https://{}/products.json?limit=1" > /tmp/codes.txt || true
+          cat budget_domains.txt | xargs -P 40 -I {} curl -s -o /dev/null -w '%{http_code}\n' \
+            --max-time 12 -A "$UA" "https://{}/products.json?limit=${{ matrix.lim }}" > /tmp/c.txt || true
           t1=$(date +%s)
-          echo "=== $(wc -l < budget_domains.txt) products.json from ONE IP in $((t1-t0))s ==="
-          sort /tmp/codes.txt | uniq -c | sort -rn
-          echo "throttle onset check: first 429 at request #$(grep -n 429 /tmp/codes.txt | head -1 | cut -d: -f1)"
+          echo "=== limit=${{ matrix.lim }}: $(wc -l < budget_domains.txt) requests in $((t1-t0))s ==="
+          sort /tmp/c.txt | uniq -c | sort -rn
+          echo "429 count: $(grep -c 429 /tmp/c.txt)"
