@@ -1,0 +1,28 @@
+name: census_test
+on:
+  workflow_dispatch:
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: build massdns
+        run: |
+          git clone --depth 1 https://github.com/blechschmidt/massdns /tmp/md >/dev/null 2>&1
+          make -C /tmp/md >/dev/null 2>&1 && echo massdns-ok
+      - name: census shard-00
+        env:
+          ENC_KEY: ${{ secrets.ENC_KEY }}
+        run: |
+          curl -sL -o shard.gz.enc "https://github.com/ahmad-kelvico/store-fabric/releases/download/census-com/shard-00.gz.enc"
+          echo "downloaded: $(wc -c < shard.gz.enc) bytes"
+          openssl enc -d -aes-256-cbc -pbkdf2 -md sha256 -pass "pass:$ENC_KEY" -in shard.gz.enc | gunzip > domains.txt
+          echo "domains: $(wc -l < domains.txt)"
+          time /tmp/md/bin/massdns -r resolvers.txt -t A -o S -s 20000 -c 15 -w out.txt domains.txt 2>md.err
+          grep -a ' A 23.227.38.' out.txt | sed 's/\. A .*//' | sort -u > shopify.txt
+          echo "SHOPIFY HITS: $(wc -l < shopify.txt)"
+          grep -aE 'Finished total|SERVFAIL' md.err | tail -2
+          head -5 shopify.txt

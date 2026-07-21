@@ -1,0 +1,35 @@
+name: census
+on:
+  workflow_dispatch:
+jobs:
+  census:
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        shard: ["00","01","02","03","04","05","06","07","08","09","10","11","12","13","14","15","16","17","18","19","20","21","22","23","24","25","26","27","28","29","30","31","32","33","34","35","36","37","38","39","40","41","42","43","44","45","46","47","48","49","50","51","52","53","54","55","56","57","58","59","60","61","62","63"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: build massdns
+        run: |
+          git clone --depth 1 https://github.com/blechschmidt/massdns /tmp/md >/dev/null 2>&1
+          make -C /tmp/md >/dev/null 2>&1 && echo massdns-ok
+      - name: census shard
+        env:
+          ENC_KEY: ${{ secrets.ENC_KEY }}
+        run: |
+          openssl enc -d -aes-256-cbc -pbkdf2 -md sha256 -pass "pass:$ENC_KEY" -in census/shard-${{ matrix.shard }}.gz.enc | gunzip > domains.txt
+          echo "domains: $(wc -l < domains.txt)"
+          /tmp/md/bin/massdns -r resolvers.txt -t A -o S -s 20000 -c 15 -w out.txt domains.txt 2>md.err
+          grep -a ' A 23.227.38.' out.txt | sed 's/\. A .*//' | sort -u > shopify.txt
+          echo "SHOPIFY HITS: $(wc -l < shopify.txt)"; grep -aE 'Finished total|SERVFAIL' md.err | tail -2
+          openssl enc -aes-256-cbc -pbkdf2 -md sha256 -pass "pass:$ENC_KEY" -in shopify.txt -out shopify-${{ matrix.shard }}.enc
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shopify-${{ matrix.shard }}
+          path: shopify-${{ matrix.shard }}.enc
+          retention-days: 5
