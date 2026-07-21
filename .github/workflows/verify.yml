@@ -25,7 +25,7 @@ jobs:
           ENC_KEY: ${{ secrets.ENC_KEY }}
           RELEASE: ${{ github.event.inputs.release }}
           RATE: "200"
-          WORKERS: "50"
+          WORKERS: "8"
         run: |
           bash verify_runner.sh ${{ matrix.shard }}
           openssl enc -aes-256-cbc -pbkdf2 -md sha256 -pass "pass:$ENC_KEY" -in keepers.tsv  -out keepers.enc

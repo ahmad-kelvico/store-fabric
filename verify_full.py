@@ -84,20 +84,16 @@ def main():
     doms = load_rows(a)
     hist = {"keeper": 0, "keeper_unknown_geo": 0, "dead": 0, "noneng": 0, "notqual": 0, "rate_final": 0}
     resolved = []
-    pending = doms
-    for rnd in range(2):
-        retry = []
-        with cf.ThreadPoolExecutor(max_workers=WORKERS) as ex:
-            for kind, d, line in ex.map(verify, pending):
-                if kind.startswith("keeper"):
-                    print(line, flush=True); hist[kind] += 1; resolved.append(d)
-                elif kind == "rate":
-                    retry.append(d)
-                else:
-                    hist[kind] += 1; resolved.append(d)
-        if not retry: break
-        import time; time.sleep(30); pending = retry
-    hist["rate_final"] = len(pending)
+    retry = []
+    with cf.ThreadPoolExecutor(max_workers=WORKERS) as ex:   # single pass; retry-WAVES (fresh IPs) recover the throttled
+        for kind, d, line in ex.map(verify, doms):
+            if kind.startswith("keeper"):
+                print(line, flush=True); hist[kind] += 1; resolved.append(d)
+            elif kind == "rate":
+                retry.append(d)
+            else:
+                hist[kind] += 1; resolved.append(d)
+    hist["rate_final"] = len(retry)
     if a.resolved_out:
         open(a.resolved_out, "w").write("\n".join(resolved) + ("\n" if resolved else ""))
     sys.stderr.write(f"[DIAG] {len(doms)} | {hist}\n")
