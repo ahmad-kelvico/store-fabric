@@ -1,6 +1,10 @@
 name: census
 on:
   workflow_dispatch:
+    inputs:
+      release:
+        description: release holding the com-NNN.gz shards
+        default: census-com
 jobs:
   census:
     strategy:
@@ -19,6 +23,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           ENC_KEY: ${{ secrets.ENC_KEY }}
+          RELEASE: ${{ github.event.inputs.release }}
         run: |
           bash census_runner.sh ${{ matrix.shard }}
           openssl enc -aes-256-cbc -pbkdf2 -md sha256 -pass "pass:$ENC_KEY" -in hits.txt -out hits.enc

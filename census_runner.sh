@@ -7,7 +7,7 @@ SHARD="$1"
 git clone --depth 1 https://github.com/blechschmidt/massdns /tmp/md >/dev/null 2>&1
 make -C /tmp/md >/dev/null 2>&1
 # fetch this shard's domain list from the release
-gh release download census-com --repo "$GITHUB_REPOSITORY" -p "com-${SHARD}.gz" -D /tmp 2>/dev/null
+gh release download "${RELEASE:-census-com}" --repo "$GITHUB_REPOSITORY" -p "com-${SHARD}.gz" -D /tmp 2>/dev/null
 gunzip -c "/tmp/com-${SHARD}.gz" > /tmp/shard.txt
 n_in=$(wc -l < /tmp/shard.txt)
 # resolve (high concurrency, 30 retries across resolvers for recall) + fingerprint Shopify
