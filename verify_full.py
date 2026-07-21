@@ -1,38 +1,29 @@
 #!/usr/bin/env python3
-# Two-stage quality-lock verifier for census candidates (no pre-known country), for the fabric.
-# Stage A (homepage): live? + Shopify.country -> English-first?  -> dead/non-english SKIP products.json
-# Stage B (products.json, only for live+English): >=10 products, >=3 priced, physical, score>=85
-# Rate-bucketed + retry-safe. Emits keepers + resolved-tracking + unknown-geo bucket (recall-safe).
-import sys, os, json, re, ssl, time, threading, urllib.request, urllib.error, concurrent.futures as cf
+# Two-stage quality-lock verifier (curl-based — urllib gets bot-tarpitted by Shopify/Cloudflare).
+# Stage A (homepage): live? + Shopify.country -> English-first?  Stage B (products.json): >=10 priced physical.
+# curl fetches (browser-like, reliable). curl-fail => DEAD (not throttle). Only HTTP 429 => retry.
+import sys, os, json, re, subprocess, concurrent.futures as cf
 import argparse
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 WEST = {"US", "GB", "CA", "AU", "NZ", "IE"}
 CUR2C = {"USD": "US", "GBP": "GB", "CAD": "CA", "AUD": "AU", "NZD": "NZ", "EUR": "IE"}
-CTX = ssl.create_default_context(); CTX.check_hostname = False; CTX.verify_mode = ssl.CERT_NONE
-RATE = float(os.environ.get("RATE", "200"))     # fabric IPs aren't throttled -> effectively uncapped
-WORKERS = int(os.environ.get("WORKERS", "50"))  # high concurrency; dead hosts fail fast (short timeout)
+WORKERS = int(os.environ.get("WORKERS", "16"))
 
-class Bucket:
-    def __init__(s, r): s.r = r; s.t = r; s.last = time.time(); s.lk = threading.Lock()
-    def take(s):
-        while True:
-            with s.lk:
-                now = time.time(); s.t = min(s.r, s.t + (now - s.last) * s.r); s.last = now
-                if s.t >= 1: s.t -= 1; return
-            time.sleep(0.03)
-B = Bucket(RATE)
-
-def get(url, n):
-    B.take()
+def curl_get(url, maxbytes):
+    """returns (http_code:int, body:bytes). code 0 = curl failed (dead)."""
     try:
-        r = urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=8, context=CTX)
-        return r.getcode(), r.read(n)
-    except urllib.error.HTTPError as e:
-        return (e.code, b"")
-    except Exception as e:
-        m = str(e).lower()
-        return (429, b"") if ("timed out" in m or "timeout" in m or "reset" in m) else (0, b"")
+        r = subprocess.run(
+            ["curl", "-sL", "--max-time", "9", "--compressed", "-A", UA, "-w", "\n%{http_code}", url],
+            capture_output=True, timeout=13)
+        out = r.stdout
+        nl = out.rfind(b"\n")
+        if nl < 0:
+            return (0, b"")
+        code = out[nl + 1:].decode("ascii", "ignore").strip()
+        return (int(code) if code.isdigit() else 0, out[:nl][:maxbytes])
+    except Exception:
+        return (0, b"")
 
 def country_of(body):
     h = body.decode("utf-8", "ignore")
@@ -41,10 +32,6 @@ def country_of(body):
     m = re.search(r'Shopify\.currency\s*=\s*\{[^}]*"active"\s*:\s*"([A-Z]{3})"', h)
     if m: return CUR2C.get(m.group(1), "?")
     return "?"
-
-def is_shopify(body):
-    h = body[:6000].decode("utf-8", "ignore").lower()
-    return "shopify" in h or "cdn.shopify" in h
 
 def gate(body, country):
     try:
@@ -68,22 +55,20 @@ def gate(body, country):
     return (n, score, phys_frac, brand)
 
 def verify(d):
-    # Stage A: homepage -> live + country
-    code, body = get(f"https://{d}", 240000)
-    if code in (429, 0): return ("rate", d, None)
+    code, body = curl_get(f"https://{d}", 240000)          # Stage A: homepage
+    if code == 429: return ("rate", d, None)
     if code != 200 or not body: return ("dead", d, None)
     country = country_of(body)
-    if country in WEST or country == "?":
-        # Stage B: products.json (only reached by live + English/unknown)
-        c2, b2 = get(f"https://{d}/products.json?limit=250", 1_500_000)
-        if c2 in (429, 0): return ("rate", d, None)
-        if c2 != 200: return ("dead", d, None)
-        g = gate(b2, country)
-        if not g: return ("notqual", d, None)
-        n, score, phys, brand = g
-        tag = "keeper" if country in WEST else "keeper_unknown_geo"
-        return (tag, d, f"{d}\t{country}\t{n}\t{score}\t{phys}\t{brand}")
-    return ("noneng", d, None)
+    if not (country in WEST or country == "?"):
+        return ("noneng", d, None)
+    c2, b2 = curl_get(f"https://{d}/products.json?limit=250", 1_500_000)   # Stage B: products.json
+    if c2 == 429: return ("rate", d, None)
+    if c2 != 200: return ("dead", d, None)
+    g = gate(b2, country)
+    if not g: return ("notqual", d, None)
+    n, score, phys, brand = g
+    tag = "keeper" if country in WEST else "keeper_unknown_geo"
+    return (tag, d, f"{d}\t{country}\t{n}\t{score}\t{phys}\t{brand}")
 
 def load_rows(a):
     if a.infile and a.shard is not None and a.of:
@@ -98,7 +83,7 @@ def main():
     ap.add_argument("--resolved-out"); a, _ = ap.parse_known_args()
     doms = load_rows(a)
     hist = {"keeper": 0, "keeper_unknown_geo": 0, "dead": 0, "noneng": 0, "notqual": 0, "rate_final": 0}
-    resolved = []; t0 = time.time()
+    resolved = []
     pending = doms
     for rnd in range(2):
         retry = []
@@ -111,12 +96,11 @@ def main():
                 else:
                     hist[kind] += 1; resolved.append(d)
         if not retry: break
-        time.sleep(65); pending = retry
+        import time; time.sleep(30); pending = retry
     hist["rate_final"] = len(pending)
     if a.resolved_out:
         open(a.resolved_out, "w").write("\n".join(resolved) + ("\n" if resolved else ""))
-    dt = time.time() - t0
-    sys.stderr.write(f"[DIAG] {len(doms)} in {dt:.0f}s | {hist} | RATE={RATE}\n")
+    sys.stderr.write(f"[DIAG] {len(doms)} | {hist}\n")
 
 if __name__ == "__main__":
     main()
