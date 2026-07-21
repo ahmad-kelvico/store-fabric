@@ -15,7 +15,7 @@ jobs:
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36"
           t0=$(date +%s)
           cat budget_domains.txt | xargs -P ${{ github.event.inputs.conc }} -I {} curl -s -o /dev/null -w '%{http_code}\n' \
-            --max-time 12 -A "$UA" "https://{}/products.json?limit=1" > /tmp/codes.txt
+            --max-time 12 -A "$UA" "https://{}/products.json?limit=1" > /tmp/codes.txt || true
           t1=$(date +%s)
           echo "=== $(wc -l < budget_domains.txt) products.json from ONE IP in $((t1-t0))s ==="
           sort /tmp/codes.txt | uniq -c | sort -rn
